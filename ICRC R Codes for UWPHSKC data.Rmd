@@ -1,0 +1,189 @@
+---
+title: "R Codes - ICRC"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+require("knitr")
+opts_knit$set(root.dir = "/Desktop/ICRC")
+```
+
+## Set your working directory and/or path the data files
+## Create a project from R studio ->File > New Project (rstats.wtf/project-oriented-workflow.html)
+
+##################################
+## UW data
+## There are N individuals that have a ProRT seq in this file.
+####################################
+
+```{r #1) Load the data, and select the columns echo=FALSE, eval = F}
+
+library(tidyverse)
+
+uw.rtseq <- read_csv("~/Dropbox/R01.Seattle/RecordLinkage/ProtRt_Sequence_Dec.2018.csv") 
+uw.rt <- uw.rtseq[, c(1,3,4)]%>%
+  mutate(SequenceType=ifelse(SequenceType=="PrtRt", "PR/RT"))
+#Select PtID, SequenceType(converted "PrtRT" to "PR/RT"), Sequence
+view (uw.rt)
+dim(uw.rt) #[1] 4745    3
+
+uw.person <- "~/Dropbox/R01.Seattle/RecordLinkage/Demographic_Dec.2018.csv" %>% read_csv
+view(uw.person)
+dim(uw.person)#[1] 2795   11
+
+uw.person.selected <-
+    uw.person %>%
+    select(PtID, BirthYear, PresentSex) #uw.pt in the original script
+
+```
+
+
+```{r #2) Assign Sequence ID based on the Patient ID and Column Number, echo=FALSE, eval=F}
+
+uw.rt_split <- uw.rt %>% split(.$PtID)
+SeqIDfunction <-function(uwptIDtibble){
+  paste(uwptIDtibble$PtID,row.names(uwptIDtibble), sep="-")
+}
+uw.rt1<-uw.rt %>%
+  mutate(SeqID=uw.rt_split %>% lapply(SeqIDfunction)%>%unlist)
+view(uw.rt1)
+dim(uw.rt1)#[1] 4745    5
+```
+
+
+```{r #3) Combine demographic and sequence data, rename, and selet the columns, and remove duplicates echo=FALSE, eval=F}
+
+# This data will contain only the data that exist in both datasets ####Same as the original script#####
+merged.uw.innerjoin<-inner_join(uw.rt1,uw.person.selected, by="PtID")%>%
+  rename(birth.year=BirthYear,sex=PresentSex)%>%
+  select("PtID", "Sequence", "birth.year", "sex", "SequenceType","SeqID")%>%
+  distinct
+dim(merged.uw.innerjoin) #[1] 4745    6 ***Same as the original script
+
+```
+
+
+###########################################
+## PHSKC data 
+###########################################
+
+```{r #1) Load the data, and clean and rename the columns echo=FALSE, eval=F} 
+library(tidyverse)
+ph.rtseq <- read.csv("Downloads/PHSKC_PR_RTSeq.csv",header=T)
+view(ph.rtseq)
+#Sequence and Seq ID 
+
+meta = readRDS(file="Downloads/sequences_meta.rds") 
+view(meta)
+
+meta.selected<-meta%>%
+  rename(PtID=newnum, SeqID=seqID)%>%
+  select("SeqID","PtID")  #SeqID and Pt ID
+view(meta.selected)
+
+```
+
+```{r #2) Combine the meta & phrtseq data  echo=FALSE, eval=F}
+###*****[dim] does not match with the original script : [1] 18263   4
+
+##1) keeping only the data present in both datasets #####Original Script ##
+ph.rtseq.ptid_inner<- inner_join(meta.selected, ph.rtseq, by ="SeqID")%>%
+   rename(Sequence=PrtRT.seq)
+view(ph.rtseq.ptid_inner) 
+dim(ph.rtseq.ptid_inner) #[1] 18262     3 #It has only the data that have all the Sequences/PtID/SeqID 
+
+##2) Keep the data that have PtID & SeqID 
+ph.rtseq.ptid_left<- left_join(meta.selected, ph.rtseq, by ="SeqID")%>%
+   rename(Sequence=PrtRT.seq)
+view(ph.rtseq.ptid_left) 
+dim(ph.rtseq.ptid_left) #[1] 21277     3 #This data have some raws without sequences
+
+```
+
+```{r #3 Combine and clean the data with demograph information echo=FALSE, eval=F}
+
+#Load data and select the columns, and remove the duplicates
+person <- readRDS(file="Downloads/person.rds")
+ph.pt<- person%>%
+  select("newnum","b_yr","sex")%>%
+  mutate(b_yr=as.double(b_yr))%>%
+  rename(PtID=newnum, birth.year=b_yr)
+ #Data with PtID, BirthYear, and Sex
+view(ph.pt)
+
+#Combine Sequence data with demographic Information, remove duplicates, and separate the "Sequence type" and "Sequence"
+
+##1) Keep the only data that have no missing information #####Original SCRIPT####
+ph.rt1_inner<-inner_join(ph.rtseq.ptid_inner, ph.pt,by="PtID")%>%
+  select("PtID","Sequence","birth.year","sex","SeqID")%>%
+  separate(SeqID, into = c("SequenceType", "SeqID"), sep = "-")%>%
+  distinct 
+view(ph.rt1_inner)#This will contain the only unique data having both sequences / Sequence ID 
+dim(ph.rt1_inner) #[1] 18262     6
+
+##2) Keep the data with PtID and SeqID (Including those with no Sequence data available)
+ph.rt1_left<-left_join(ph.rtseq.ptid_left, ph.pt,by="PtID")%>%
+  select("PtID","Sequence","birth.year","sex","SeqID")%>%
+  separate(SeqID, into = c("SequenceType", "SeqID"), sep = "-")%>%
+  distinct 
+view(ph.rt1_left)#This will contain all the unique data that have PtID and SeqID, but some missing Sequence data
+dim(ph.rt1_left) #[1] 21277     6
+
+```
+
+#############################
+########Start to compare cleaned.merged.uw & ph.rt1 by (birth year, sex, seq)
+#############################
+
+```{r #3  Extract the overlapping samples from "cleaned.merged.uw and ph.rt1" by birth year, sex and Sequence echo=FALSE, eval=F)}
+
+# Combine the UW and PHSKC data by extracting the data that match by sex, sequence and birth year, removing duplicates (Keeping only those with all the information, no missing data)
+ 
+joined<-inner_join(merged.uw.innerjoin,ph.rt1_inner,by=c("sex","Sequence","birth.year"))%>%distinct%>%
+  rename(uw.PtID=PtID.x, uw.SeqID=SeqID.x,ph.PtID=PtID.y, ph.SeqID=SeqID.y, uw.SequenceType=SequenceType.x, ph.SequenceType=SequenceType.y)%>%
+  select(uw.PtID,uw.SeqID,ph.PtID,ph.SeqID,uw.SequenceType,ph.SequenceType,birth.year,sex,Sequence)
+  
+view(joined)
+
+```
+
+
+```{r #3 Create a single merged dataset with all the unique sequences found in either data set without duplicates. echo=FALSE, eval=F)}
+
+merged.uw.full <- full_join(uw.rt1,uw.person.seleted,by="PtID")%>%
+  rename(birth.year=BirthYear,sex=PresentSex)%>%
+  select("PtID", "Sequence", "birth.year", "sex", "SequenceType","SeqID")%>%
+  distinct
+view(merged.uw.full)
+
+ph.rtseq.ptid_full<- full_join(meta.selected, ph.rtseq, by ="SeqID")%>%
+   rename(Sequence=PrtRT.seq)%>%
+  distinct%>%
+   filter(Sequence!=F)
+
+ph.rt1_full<- full_join(ph.rtseq.ptid_full, ph.pt, by ="PtID")%>%
+  select("PtID","Sequence","birth.year","sex","SeqID")%>%
+  separate(SeqID, into = c("SequenceType", "SeqID"), sep = "-")%>%
+   filter(Sequence!=F)%>%
+  distinct 
+
+dim(merged.uw.full) #[1] 4803    6
+dim(ph.rt1_full)#[1] 18263     6
+
+full_merged<-full_join(merged.uw.full,ph.rt1_full,by="Sequence")%>%
+  distinct%>%
+  rename(uw.PtID=PtID.x, uw.SeqID=SeqID.x,ph.PtID=PtID.y, ph.SeqID=SeqID.y, uw.SequenceType=SequenceType.x, ph.SequenceType=SequenceType.y, uw.birth.year=birth.year.x, ph.birth.year=birth.year.y,uw.sex=sex.x, ph.sex=sex.y)
+
+full_merged$Sequence%>%unique%>%length #[1] 1900４unique sequences in this merged dataset
+full_merged$Sequence%>%length #[1] 19210 Unique Sequences 
+
+full_unique_seq<-full_merged %>% distinct(Sequence, .keep_all = TRUE)
+#Keep unique sequences (remove duplicates)
+view(full_unique_seq)
+view(full_merged)
+dim(full_unique_seq) #[1] 19004     11
+ 
+```
+
+###If they work, then I would like to create functions for combining  datasets, removing duplicates, renaming the columns. So that we can use a very short coding for doing this script. ### 
